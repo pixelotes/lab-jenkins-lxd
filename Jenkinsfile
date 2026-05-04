@@ -27,11 +27,12 @@ pipeline {
     stage('2. Terraform Init') {
       steps {
         sh '''
+          SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found. Rebuild Jenkins with: docker compose up -d --build"; exit 1; }
           docker run --rm \
             -v ${LXD_SOCKET}:${LXD_SOCKET} \
             -v ${HOST_DIR}/terraform:/terraform \
             -w /terraform \
-            -e TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)" \
+            -e TF_VAR_ssh_public_key="${SSH_KEY}" \
             ${TF_IMAGE} init
         '''
       }
@@ -40,11 +41,12 @@ pipeline {
     stage('3. Terraform Apply') {
       steps {
         sh '''
+          SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found. Rebuild Jenkins with: docker compose up -d --build"; exit 1; }
           docker run --rm \
             -v ${LXD_SOCKET}:${LXD_SOCKET} \
             -v ${HOST_DIR}/terraform:/terraform \
             -w /terraform \
-            -e TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)" \
+            -e TF_VAR_ssh_public_key="${SSH_KEY}" \
             ${TF_IMAGE} apply -auto-approve
         '''
       }
@@ -55,11 +57,12 @@ pipeline {
         script {
           def vmIp = sh(
             script: '''
+              SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found."; exit 1; }
               docker run --rm \
                 -v ${LXD_SOCKET}:${LXD_SOCKET} \
                 -v ${HOST_DIR}/terraform:/terraform \
                 -w /terraform \
-                -e TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)" \
+                -e TF_VAR_ssh_public_key="${SSH_KEY}" \
                 ${TF_IMAGE} output -raw vm_ip
             ''',
             returnStdout: true
@@ -136,7 +139,7 @@ ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansib
           -v ${LXD_SOCKET}:${LXD_SOCKET} \
           -v ${HOST_DIR}/terraform:/terraform \
           -w /terraform \
-          -e TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)" \
+          -e TF_VAR_ssh_public_key="$(cat /root/.ssh/id_rsa.pub 2>/dev/null)" \
           ${TF_IMAGE} destroy -auto-approve || true
       '''
     }
