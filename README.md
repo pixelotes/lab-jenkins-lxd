@@ -1,7 +1,7 @@
 # Lab DevOps (LXD): Terraform + Ansible + Jenkins con Docker
 ### LXD · Ubuntu Server · Apache · Prometheus · Grafana
 
-La versión más simple del lab. LXD descarga la imagen, inyecta la clave SSH
+Versión automatizada del lab. LXD descarga la imagen, inyecta la clave SSH
 via cloud-init y devuelve la IP directamente. Sin plantillas, sin APIs de terceros.
 
 ---
