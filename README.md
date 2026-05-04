@@ -1,7 +1,7 @@
 # Lab DevOps (LXD): Terraform + Ansible + Jenkins con Docker
 ### LXD · Ubuntu Server · Apache · Prometheus · Grafana
 
-La versión más simple del lab. LXD descarga la imagen, inyecta la clave SSH
+Versión automatizada del lab. LXD descarga la imagen, inyecta la clave SSH
 via cloud-init y devuelve la IP directamente. Sin plantillas, sin APIs de terceros.
 
 ---
@@ -30,18 +30,6 @@ La clave SSH se genera automáticamente en `./ssh/` al primer arranque. El pipel
 
 El job se llama `lab-devops-lxd` y está disponible en [http://localhost:8080](http://localhost:8080) en cuanto Jenkins termine de arrancar.
 
----
-
-## Comparativa de setup con los otros labs
-
-| Paso | VMware | VirtualBox | LXD |
-|------|--------|------------|-----|
-| Instalar hypervisor | VMware Pro (manual) | VirtualBox (manual) | `snap install lxd` |
-| Configurar API | `vmrest -C` + arrancar servicio | crear red host-only | — |
-| Preparar imagen base | Crear VM + exportar OVA | Crear VM + exportar OVA | — |
-| Configurar SSH en plantilla | `ssh-copy-id` a VM manual | `ssh-copy-id` a VM manual | cloud-init lo hace solo |
-| Credenciales en Jenkins | vmrest password + template ID | — | — |
-| Tiempo de setup | ~30 min | ~20 min | ~5 min |
 
 ---
 
