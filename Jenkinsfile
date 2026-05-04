@@ -13,6 +13,22 @@ pipeline {
 
   stages {
 
+    stage('0. SSH Key') {
+      steps {
+        sh '''
+          if [ ! -f /root/.ssh/id_rsa ]; then
+            mkdir -p /root/.ssh && chmod 700 /root/.ssh
+            ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -C "jenkins-lab" -q
+            chmod 600 /root/.ssh/id_rsa
+            chmod 644 /root/.ssh/id_rsa.pub
+            echo "SSH key generated: $(cat /root/.ssh/id_rsa.pub)"
+          else
+            echo "SSH key already present."
+          fi
+        '''
+      }
+    }
+
     stage('1. Build: Imágenes Docker') {
       steps {
         sh '''
