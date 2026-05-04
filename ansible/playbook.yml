@@ -1,0 +1,154 @@
+---
+- name: Configurar Ubuntu Server con Apache, Prometheus y Grafana
+  hosts: web
+  become: yes
+  gather_facts: yes
+
+  vars:
+    grafana_admin_password: "admin"
+
+  tasks:
+    # ─── Esperar cloud-init y locks de apt ──────────────────────────────────
+    - name: Esperar a que cloud-init termine
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Esperar a que los locks de apt/dpkg estén libres
+      ansible.builtin.shell: |
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
+          sleep 3
+        done
+      changed_when: false
+
+    # ─── Sistema base ────────────────────────────────────────────────────────
+    - name: Actualizar caché apt
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Instalar dependencias base
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - software-properties-common
+        state: present
+
+    # ─── Apache2 ─────────────────────────────────────────────────────────────
+    - name: Instalar Apache2
+      ansible.builtin.apt:
+        name: apache2
+        state: present
+
+    - name: Crear página de inicio personalizada
+      ansible.builtin.copy:
+        dest: /var/www/html/index.html
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <body>
+            <h1>Lab DevOps - IaC</h1>
+            <p>Infraestructura desplegada con Terraform + Ansible + Jenkins</p>
+            <ul>
+              <li><a href="http://{{ ansible_host }}:9090">Prometheus</a></li>
+              <li><a href="http://{{ ansible_host }}:3000">Grafana</a></li>
+            </ul>
+          </body>
+          </html>
+
+    # ─── Prometheus ──────────────────────────────────────────────────────────
+    - name: Instalar Prometheus y Node Exporter
+      ansible.builtin.apt:
+        name:
+          - prometheus
+          - prometheus-node-exporter
+        state: present
+
+    # ─── Grafana ─────────────────────────────────────────────────────────────
+    - name: Crear directorio de keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Descargar clave GPG de Grafana
+      ansible.builtin.get_url:
+        url: https://apt.grafana.com/gpg.key
+        dest: /etc/apt/keyrings/grafana.asc
+        mode: '0644'
+
+    - name: Añadir repositorio de Grafana
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+        state: present
+        filename: grafana
+        update_cache: yes
+
+    - name: Instalar Grafana OSS
+      ansible.builtin.apt:
+        name: grafana
+        state: present
+        update_cache: yes
+
+    # ─── Arrancar y habilitar servicios ──────────────────────────────────────
+    - name: Habilitar y arrancar servicios
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      loop:
+        - apache2
+        - prometheus
+        - prometheus-node-exporter
+        - grafana-server
+
+    # ─── Configurar Grafana: datasource Prometheus ────────────────────────────
+    - name: Esperar a que Grafana esté disponible
+      ansible.builtin.uri:
+        url: http://localhost:3000/api/health
+        status_code: 200
+      register: grafana_health
+      until: grafana_health.status == 200
+      retries: 30
+      delay: 10
+
+    - name: Añadir datasource Prometheus en Grafana
+      ansible.builtin.uri:
+        url: http://localhost:3000/api/datasources
+        method: POST
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          name: Prometheus
+          type: prometheus
+          url: http://localhost:9090
+          access: proxy
+          isDefault: true
+        status_code: [200, 409]  # 409 = ya existe, está bien
+
+    # ─── Verificación ────────────────────────────────────────────────────────
+    - name: Verificar Apache
+      ansible.builtin.uri:
+        url: "http://localhost"
+        status_code: 200
+
+    - name: Verificar Prometheus
+      ansible.builtin.uri:
+        url: "http://localhost:9090/-/healthy"
+        status_code: 200
+
+    - name: Verificar Grafana
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+
+    - name: Resumen de servicios
+      ansible.builtin.debug:
+        msg:
+          - "Apache:     http://{{ ansible_host }}"
+          - "Prometheus: http://{{ ansible_host }}:9090"
+          - "Grafana:    http://{{ ansible_host }}:3000  (admin/{{ grafana_admin_password }})"

@@ -1,0 +1,19 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    ansible \
+    openssh-client \
+    sshpass \
+    curl \
+    jq \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ansible
+
+# ansible.cfg se monta en tiempo de ejecución junto con el playbook
+# La clave SSH se monta desde ~/.ssh del host
+
+ENTRYPOINT ["ansible-playbook"]

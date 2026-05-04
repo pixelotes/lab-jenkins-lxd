@@ -1,0 +1,12 @@
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+ansible/inventory.ini
+ssh/id_rsa
+ssh/id_rsa.pub
+ssh/known_hosts
+*.pem
+*.key
+*.log
