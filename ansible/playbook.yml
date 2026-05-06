@@ -130,6 +130,32 @@
           isDefault: true
         status_code: [200, 409]  # 409 = ya existe, está bien
 
+    # ─── Dashboard: Node Exporter Full ──────────────────────────────────────
+    - name: Descargar JSON del dashboard Node Exporter Full
+      ansible.builtin.uri:
+        url: https://grafana.com/api/dashboards/1860/revisions/latest/download
+        method: GET
+        return_content: yes
+      register: dashboard_json
+
+    - name: Importar dashboard Node Exporter Full en Grafana
+      ansible.builtin.uri:
+        url: http://localhost:3000/api/dashboards/import
+        method: POST
+        user: admin
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          dashboard: "{{ dashboard_json.json }}"
+          overwrite: true
+          inputs:
+            - name: DS_PROMETHEUS
+              type: datasource
+              pluginId: prometheus
+              value: Prometheus
+        status_code: [200]
+
     # ─── Verificación ────────────────────────────────────────────────────────
     - name: Verificar Apache
       ansible.builtin.uri:
