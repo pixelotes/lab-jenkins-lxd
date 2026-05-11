@@ -4,6 +4,9 @@
 Versión automatizada del lab. LXD descarga la imagen, inyecta la clave SSH
 via cloud-init y devuelve la IP directamente. Sin plantillas, sin APIs de terceros.
 
+> [!CAUTION]
+> Esta versión del lab no funciona con Docker Desktop debido a sus limitaciones
+
 ---
 
 ## Prerrequisitos
