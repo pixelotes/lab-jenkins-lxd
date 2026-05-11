@@ -1,50 +1,77 @@
-# Lab DevOps (LXD): Terraform + Ansible + Jenkins con Docker
-### LXD · Ubuntu Server · Apache · Prometheus · Grafana
+# Lab DevOps (VirtualBox): Vagrant + Ansible + Jenkins con Docker
+### VirtualBox · Ubuntu Server · Apache · Prometheus · Grafana
 
-Versión automatizada del lab. LXD descarga la imagen, inyecta la clave SSH
-via cloud-init y devuelve la IP directamente. Sin plantillas, sin APIs de terceros.
+Versión adaptada del lab para VirtualBox. Vagrant descarga la box
+`ubuntu/jammy64` (ya viene con SSH listo, sin cloud-init) y NAT/port-forwarding
+expone los servicios en el `localhost` del host.
 
 ---
 
 ## Prerrequisitos
 
-- **LXD** instalado e inicializado (una vez por máquina):
+- **VirtualBox 7.x** y **Vagrant** instalados:
 
 ```bash
-sudo snap install lxd && sudo lxd init
-sudo usermod -aG lxd $USER  # cerrar sesión y volver a entrar
-bash scripts/01-setup-lxd.sh
+# macOS
+brew install --cask virtualbox virtualbox-extension-pack vagrant
+
+# Debian/Ubuntu
+sudo apt install virtualbox vagrant
 ```
 
-- **Docker**
+- **Docker Desktop** (macOS/Windows) o **Docker Engine + compose v2** (Linux).
+
+> **Nota macOS Apple Silicon (M1/M2/M3):** VirtualBox tiene soporte ARM aún
+> experimental y la box `ubuntu/jammy64` es x86_64. Para validar el lab,
+> ejecútalo en un host Intel/AMD64. En Apple Silicon, considera UTM/Parallels
+> con una box ARM equivalente.
 
 ---
 
 ## Arrancar
 
+Un solo comando bootstrapea todo (clave SSH, VM, Jenkins):
+
 ```bash
-docker compose up -d
+bash scripts/01-setup-virtualbox.sh
 ```
 
-La clave SSH se genera automáticamente en `./ssh/` al primer arranque. El pipeline ya está precargado en Jenkins — solo hay que ejecutarlo.
+El script:
 
-El job se llama `lab-devops-lxd` y está disponible en [http://localhost:8080](http://localhost:8080) en cuanto Jenkins termine de arrancar.
+1. Comprueba que `VBoxManage`, `vagrant` y `docker compose` están en PATH.
+2. Genera `./ssh/id_rsa` si no existe (clave compartida host ↔ Jenkins ↔ VM).
+3. `vagrant up` — descarga la box, arranca la VM, inyecta la clave pública.
+4. `docker compose up -d --build` — levanta Jenkins.
 
+Cuando termine, abre [http://localhost:8080](http://localhost:8080) y lanza el
+job `lab-devops-virtualbox` (ya precargado).
 
 ---
 
-## Cómo funciona el contenedor Terraform con LXD
-
-Solo necesita el socket Unix de LXD montado. Sin `--privileged`, sin APIs HTTP:
+## Topología de red
 
 ```mermaid
-flowchart TD
-    A["Terraform\n(Docker container)"] -->|"-v unix.socket"| B["LXD Unix socket\n/var/snap/lxd/common/lxd/unix.socket"]
-    B --> C["LXD daemon\n(host)"]
-    A -->|"lxd_instance 'ubuntu-devops'"| D["terraform-lxd/lxd provider"]
-    D -->|"image = ubuntu:22.04\nuser.user-data = cloud-init"| C
-    C -->|"SSH key inyectada\nen primer boot"| E["VM ubuntu-devops\nIP + SSH listos"]
+flowchart LR
+    Host["Host (macOS/Linux)<br/>localhost"]
+    Browser["Navegador<br/>localhost:8080/8081/9090/3000"]
+    Jenkins["Jenkins (Docker)<br/>container"]
+    VBox["VirtualBox VM<br/>ubuntu-devops"]
+
+    Browser --> Host
+    Host -- "127.0.0.1:8080" --> Jenkins
+    Host -- "NAT port-forward<br/>2222/8081/9090/3000" --> VBox
+    Jenkins -- "host.docker.internal:2222<br/>(SSH + Ansible)" --> Host
+    Jenkins -- "host.docker.internal:8081/9090/3000<br/>(verificacion)" --> Host
 ```
+
+Port-forwards de VirtualBox (definidos en `Vagrantfile`):
+
+| Servicio   | Guest | Host   |
+|------------|-------|--------|
+| SSH        | 22    | 2222   |
+| Apache     | 80    | 8081   |
+| Prometheus | 9090  | 9090   |
+| Grafana    | 3000  | 3000   |
 
 ---
 
@@ -54,51 +81,67 @@ flowchart TD
 sequenceDiagram
     actor Dev
     participant Jenkins
-    participant Terraform as Terraform (Docker)
-    participant LXD as LXD daemon
-    participant VM as ubuntu-devops (VM)
+    participant VM as ubuntu-devops (VBox)
     participant Ansible as Ansible (Docker)
 
     Dev->>Jenkins: Build Now
-    Jenkins->>Terraform: docker run ... init
-    Terraform-->>Jenkins: providers descargados
-
-    Jenkins->>Terraform: docker run ... apply
-    Terraform->>LXD: lxd_instance + cloud-init
-    LXD->>VM: boot + SSH key inyectada
-    VM-->>LXD: IP asignada
-    LXD-->>Terraform: ipv4_address
-    Terraform-->>Jenkins: vm_ip output
-
-    Jenkins->>Jenkins: Esperar SSH (port 22)
-    VM-->>Jenkins: SSH disponible
-
-    Jenkins->>Ansible: docker run ... playbook.yml
-    Ansible->>VM: apt install apache2, prometheus, grafana
-    Ansible->>VM: habilitar servicios
-    VM-->>Ansible: ok (19 tasks)
-    Ansible-->>Jenkins: PLAY RECAP ok=19 failed=0
-
-    Jenkins->>VM: curl Apache :80
-    Jenkins->>VM: curl Prometheus :9090/-/healthy
-    Jenkins->>VM: curl Grafana :3000/api/health
-    VM-->>Jenkins: 200 OK × 3
-    Jenkins-->>Dev: SUCCESS ✓
+    Jenkins->>Jenkins: Verifica /root/.ssh/id_rsa
+    Jenkins->>Jenkins: docker build (ansible image)
+    Jenkins->>VM: TCP 2222 (esperar SSH)
+    VM-->>Jenkins: SSH listo
+    Jenkins->>Jenkins: writeFile inventory.ini
+    Jenkins->>Ansible: docker run playbook.yml
+    Ansible->>VM: apt apache2, prometheus, grafana
+    Ansible-->>Jenkins: PLAY RECAP ok
+    Jenkins->>VM: curl :8081 / :9090 / :3000
+    VM-->>Jenkins: 200 OK x3
+    Jenkins-->>Dev: SUCCESS
 ```
 
 ---
 
-## Destruir
+## Operativa
 
-```bash
-docker run --rm \
-  -v /var/snap/lxd/common/lxd/unix.socket:/var/snap/lxd/common/lxd/unix.socket \
-  -v $(pwd)/terraform:/terraform \
-  -w /terraform \
-  -e TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)" \
-  lab-lxd-terraform:latest destroy -auto-approve
-```
+- **Acceder por SSH a la VM:**
+  ```bash
+  ssh -i ssh/id_rsa -p 2222 vagrant@localhost
+  ```
 
-O directamente: `lxc delete ubuntu-devops --force`
+- **Reiniciar la VM** (sin destruirla):
+  ```bash
+  vagrant reload
+  ```
+
+- **Destruir todo:**
+  ```bash
+  docker compose down
+  vagrant destroy -f
+  ```
+
+- **Re-bootstrap completo** (tras destruir):
+  ```bash
+  bash scripts/01-setup-virtualbox.sh
+  ```
 
 ---
+
+## Estructura
+
+```
+.
+├── Vagrantfile              # VM Ubuntu via VirtualBox + provisioner SSH
+├── Jenkinsfile              # Pipeline: build, SSH wait, Ansible, verify
+├── docker-compose.yml       # Jenkins en contenedor
+├── scripts/
+│   └── 01-setup-virtualbox.sh
+├── docker/
+│   ├── Dockerfile.jenkins
+│   ├── Dockerfile.ansible
+│   └── entrypoint.sh
+├── ansible/
+│   ├── ansible.cfg
+│   └── playbook.yml
+├── jenkins/
+│   └── init.groovy.d/       # job lab-devops-virtualbox precargado
+└── ssh/                     # claves generadas por el setup script
+```

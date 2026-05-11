@@ -3,7 +3,7 @@ import org.jenkinsci.plugins.workflow.job.WorkflowJob
 import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition
 
 def instance = Jenkins.getInstance()
-def jobName  = "lab-devops-lxd"
+def jobName  = "lab-devops-virtualbox"
 
 def job = instance.getItem(jobName) ?: instance.createProject(WorkflowJob, jobName)
 def jenkinsfilePath = new File('/workspace/Jenkinsfile')

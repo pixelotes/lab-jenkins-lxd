@@ -6,6 +6,12 @@
 
   vars:
     grafana_admin_password: "admin"
+    # Sobreescribibles desde el inventario para que las URLs visibles en la
+    # pagina de Apache funcionen desde el navegador del host (port-forwards).
+    lab_display_host: "{{ ansible_host }}"
+    lab_apache_port: 80
+    lab_prom_port: 9090
+    lab_graf_port: 3000
 
   tasks:
     # ─── Esperar cloud-init y locks de apt ──────────────────────────────────
@@ -49,10 +55,10 @@
           <html>
           <body>
             <h1>Lab DevOps - IaC</h1>
-            <p>Infraestructura desplegada con Terraform + Ansible + Jenkins</p>
+            <p>Infraestructura desplegada con Vagrant + Ansible + Jenkins</p>
             <ul>
-              <li><a href="http://{{ ansible_host }}:9090">Prometheus</a></li>
-              <li><a href="http://{{ ansible_host }}:3000">Grafana</a></li>
+              <li><a href="http://{{ lab_display_host }}:{{ lab_prom_port }}">Prometheus</a></li>
+              <li><a href="http://{{ lab_display_host }}:{{ lab_graf_port }}">Grafana</a></li>
             </ul>
           </body>
           </html>
@@ -175,6 +181,6 @@
     - name: Resumen de servicios
       ansible.builtin.debug:
         msg:
-          - "Apache:     http://{{ ansible_host }}"
-          - "Prometheus: http://{{ ansible_host }}:9090"
-          - "Grafana:    http://{{ ansible_host }}:3000  (admin/{{ grafana_admin_password }})"
+          - "Apache:     http://{{ lab_display_host }}:{{ lab_apache_port }}"
+          - "Prometheus: http://{{ lab_display_host }}:{{ lab_prom_port }}"
+          - "Grafana:    http://{{ lab_display_host }}:{{ lab_graf_port }}  (admin/{{ grafana_admin_password }})"

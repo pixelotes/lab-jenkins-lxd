@@ -2,115 +2,81 @@ pipeline {
   agent any
 
   environment {
-    TF_IMAGE      = 'lab-lxd-terraform:latest'
-    ANSIBLE_IMAGE = 'lab-lxd-ansible:latest'
-    // Path dentro del contenedor Jenkins (para docker build y writeFile)
+    ANSIBLE_IMAGE = 'lab-vbox-ansible:latest'
     WORKSPACE_DIR = '/workspace'
-    // Path real en el host (para volúmenes en docker run)
     HOST_DIR      = "${env.LAB_HOST_PATH}"
-    LXD_SOCKET    = '/var/snap/lxd/common/lxd/unix.socket'
+
+    // La VM la gestiona Vagrant en el host. Desde el contenedor Jenkins
+    // se accede al host (y por tanto a los port-forwards de VirtualBox)
+    // via host.docker.internal.
+    VM_HOST       = 'host.docker.internal'
+    VM_SSH_PORT   = '2222'
+    VM_USER       = 'vagrant'
+    VM_HTTP_PORT  = '8081'
+    VM_PROM_PORT  = '9090'
+    VM_GRAF_PORT  = '3000'
+
+    // URLs visibles para humanos (desde el navegador del host).
+    LAB_DISPLAY_HOST = 'localhost'
   }
 
   stages {
 
-    stage('0. SSH Key') {
+    stage('0. Comprobar clave SSH') {
       steps {
         sh '''
           if [ ! -f /root/.ssh/id_rsa ]; then
-            mkdir -p /root/.ssh && chmod 700 /root/.ssh
-            ssh-keygen -t rsa -b 4096 -f /root/.ssh/id_rsa -N "" -C "jenkins-lab" -q
-            chmod 600 /root/.ssh/id_rsa
-            chmod 644 /root/.ssh/id_rsa.pub
-            echo "SSH key generated: $(cat /root/.ssh/id_rsa.pub)"
-          else
-            echo "SSH key already present."
+            echo "ERROR: /root/.ssh/id_rsa no encontrado."
+            echo "Ejecuta primero: bash scripts/01-setup-virtualbox.sh"
+            exit 1
           fi
+          echo "SSH key OK: $(cat /root/.ssh/id_rsa.pub)"
         '''
       }
     }
 
-    stage('1. Build: Imágenes Docker') {
+    stage('1. Build: imagen Ansible') {
       steps {
         sh '''
-          docker build -f ${WORKSPACE_DIR}/docker/Dockerfile.terraform \
-            -t ${TF_IMAGE} ${WORKSPACE_DIR}
           docker build -f ${WORKSPACE_DIR}/docker/Dockerfile.ansible \
             -t ${ANSIBLE_IMAGE} ${WORKSPACE_DIR}
         '''
       }
     }
 
-    stage('2. Terraform Init') {
+    stage('2. Esperar SSH de la VM') {
       steps {
         sh '''
-          SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found. Rebuild Jenkins with: docker compose up -d --build"; exit 1; }
-          docker run --rm \
-            -v ${LXD_SOCKET}:${LXD_SOCKET} \
-            -v ${HOST_DIR}/terraform:/terraform \
-            -w /terraform \
-            -e TF_VAR_ssh_public_key="${SSH_KEY}" \
-            ${TF_IMAGE} init
+          echo "Esperando SSH en ${VM_HOST}:${VM_SSH_PORT} ..."
+          timeout 180 bash -c \
+            "until bash -c 'echo > /dev/tcp/${VM_HOST}/${VM_SSH_PORT}' 2>/dev/null; do
+               sleep 5; echo 'aun no disponible...';
+             done"
+          echo "SSH listo."
         '''
       }
     }
 
-    stage('3. Terraform Apply') {
+    stage('3. Generar inventario Ansible') {
       steps {
-        sh '''
-          SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found. Rebuild Jenkins with: docker compose up -d --build"; exit 1; }
-          docker run --rm \
-            -v ${LXD_SOCKET}:${LXD_SOCKET} \
-            -v ${HOST_DIR}/terraform:/terraform \
-            -w /terraform \
-            -e TF_VAR_ssh_public_key="${SSH_KEY}" \
-            ${TF_IMAGE} apply -auto-approve
-        '''
-      }
-    }
-
-    stage('4. Obtener IP de la VM') {
-      steps {
-        script {
-          def vmIp = sh(
-            script: '''
-              SSH_KEY=$(cat /root/.ssh/id_rsa.pub 2>/dev/null) || { echo "ERROR: SSH key not found."; exit 1; }
-              docker run --rm \
-                -v ${LXD_SOCKET}:${LXD_SOCKET} \
-                -v ${HOST_DIR}/terraform:/terraform \
-                -w /terraform \
-                -e TF_VAR_ssh_public_key="${SSH_KEY}" \
-                ${TF_IMAGE} output -raw vm_ip
-            ''',
-            returnStdout: true
-          ).trim()
-
-          env.VM_IP = vmIp
-          echo "VM IP: ${vmIp}"
-
-          writeFile file: "${env.WORKSPACE_DIR}/ansible/inventory.ini", text: """\
+        writeFile file: "${env.WORKSPACE_DIR}/ansible/inventory.ini", text: """\
 [web]
-${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+${env.VM_HOST} ansible_user=${env.VM_USER} ansible_port=${env.VM_SSH_PORT} ansible_ssh_private_key_file=/root/.ssh/id_rsa ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+[web:vars]
+lab_display_host=${env.LAB_DISPLAY_HOST}
+lab_apache_port=${env.VM_HTTP_PORT}
+lab_prom_port=${env.VM_PROM_PORT}
+lab_graf_port=${env.VM_GRAF_PORT}
 """
-        }
       }
     }
 
-    stage('5. Esperar SSH') {
-      steps {
-        sh '''
-          echo "Esperando SSH en ${VM_IP}:22..."
-          timeout 120 bash -c \
-            "until bash -c 'echo > /dev/tcp/${VM_IP}/22' 2>/dev/null; do sleep 5; echo 'aún no disponible...'; done"
-          echo "SSH listo en ${VM_IP}"
-        '''
-      }
-    }
-
-    stage('6. Ansible Deploy') {
+    stage('4. Ansible Deploy') {
       steps {
         sh '''
           docker run --rm \
-            --network host \
+            --add-host=host.docker.internal:host-gateway \
             -v ${HOST_DIR}/ansible:/ansible \
             -v ${HOST_DIR}/ssh:/root/.ssh:ro \
             -w /ansible \
@@ -122,16 +88,16 @@ ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansib
       }
     }
 
-    stage('7. Verificación') {
+    stage('5. Verificacion') {
       steps {
         sh '''
-          echo "=== Verificando servicios en ${VM_IP} ==="
-          curl -f --retry 5 --retry-delay 3 http://${VM_IP}
-          echo "✓ Apache OK"
-          curl -f --retry 5 --retry-delay 3 http://${VM_IP}:9090/-/healthy
-          echo "✓ Prometheus OK"
-          curl -f --retry 5 --retry-delay 3 http://${VM_IP}:3000/api/health
-          echo "✓ Grafana OK"
+          echo "=== Verificando servicios via ${VM_HOST} ==="
+          curl -f --retry 5 --retry-delay 3 http://${VM_HOST}:${VM_HTTP_PORT}
+          echo "OK Apache"
+          curl -f --retry 5 --retry-delay 3 http://${VM_HOST}:${VM_PROM_PORT}/-/healthy
+          echo "OK Prometheus"
+          curl -f --retry 5 --retry-delay 3 http://${VM_HOST}:${VM_GRAF_PORT}/api/health
+          echo "OK Grafana"
         '''
       }
     }
@@ -140,24 +106,17 @@ ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=/root/.ssh/id_rsa ansib
   post {
     success {
       echo """
-        ╔══════════════════════════════════════════════╗
-        ║  Infraestructura desplegada correctamente     ║
-        ╠══════════════════════════════════════════════╣
-        ║  Apache:     http://${VM_IP}                 ║
-        ║  Prometheus: http://${VM_IP}:9090            ║
-        ║  Grafana:    http://${VM_IP}:3000  (admin)   ║
-        ╚══════════════════════════════════════════════╝
+        ╔══════════════════════════════════════════════════╗
+        ║  Infraestructura desplegada correctamente         ║
+        ╠══════════════════════════════════════════════════╣
+        ║  Apache:     http://${LAB_DISPLAY_HOST}:${VM_HTTP_PORT}
+        ║  Prometheus: http://${LAB_DISPLAY_HOST}:${VM_PROM_PORT}
+        ║  Grafana:    http://${LAB_DISPLAY_HOST}:${VM_GRAF_PORT}  (admin/admin)
+        ╚══════════════════════════════════════════════════╝
       """
     }
     failure {
-      sh '''
-        docker run --rm \
-          -v ${LXD_SOCKET}:${LXD_SOCKET} \
-          -v ${HOST_DIR}/terraform:/terraform \
-          -w /terraform \
-          -e TF_VAR_ssh_public_key="$(cat /root/.ssh/id_rsa.pub 2>/dev/null)" \
-          ${TF_IMAGE} destroy -auto-approve || true
-      '''
+      echo "Pipeline fallida. Para reiniciar la VM: 'vagrant reload' en el host."
     }
   }
 }
